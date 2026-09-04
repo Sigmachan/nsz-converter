@@ -9,35 +9,33 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Test
-        run: echo "Hello from CI"
+      
       - name: Get tag
         id: tag
         run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          name: "NSZ Converter ${{ steps.tag.outputs.tag }}"
-          body: |
+      
+      - name: Create release
+        run: |
+          gh release create "${{ steps.tag.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --title "NSZ Converter ${{ steps.tag.outputs.tag }}" \
+            --notes "
             ## NSZ Converter ${{ steps.tag.outputs.tag }}
             
-            Initial release with:
-            - Beautiful Discord-style GUI
+            Production-ready NSZ ↔ NSP converter with beautiful Discord-style GUI.
+            
+            ### Features
             - Cross-platform support (macOS, Windows, Linux)
-            - NSZ → NSP conversion with embedded runtime
-            - Auto file monitoring
+            - Embedded nsz runtime (no Python needed)
+            - Auto file monitoring and conversion
             - Game folder organization
             
-            ### Downloads
-            - 🍎 macOS: Coming soon (build locally with `cargo tauri build`)
-            - 🪟 Windows: Coming soon
-            - 🐧 Linux: Coming soon
-          draft: false
-          prerelease: false
+            ### Building Locally
+            See BUILD.md for instructions.
+            "
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
