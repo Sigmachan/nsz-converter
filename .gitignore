@@ -1,0 +1,50 @@
+# Build artifacts
+/target/
+**/target/
+*.exe
+*.dll
+*.so
+*.dylib
+*.app
+*.dmg
+*.msi
+*.AppImage
+*.deb
+*.rpm
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
