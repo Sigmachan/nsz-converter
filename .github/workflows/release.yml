@@ -1,0 +1,254 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v1.0.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: macos-arm64
+            platform: macOS-ARM64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: macos-x64
+            platform: macOS-x64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: windows-x64
+            platform: Windows-x64
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            artifact: linux-x64
+            platform: Linux-x64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install system dependencies (Linux)
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libgtk-3-dev \
+            libappindicator3-dev
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli@2
+
+      - name: Build Tauri (macOS/Linux)
+        if: runner.os != 'Windows'
+        run: cargo tauri build --target ${{ matrix.target }} --bundles dmg,appimage,deb
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Build Tauri (Windows)
+        if: runner.os == 'Windows'
+        run: cargo tauri build --target ${{ matrix.target }} --bundles msi
+
+      - name: Find macOS artifacts
+        if: runner.os == 'macOS'
+        id: macos_artifacts
+        run: |
+          DMG=$(find src-tauri/target -name "*.dmg" -type f 2>/dev/null | head -1)
+          APP=$(find src-tauri/target -name "*.app" -type d 2>/dev/null | head -1)
+          ZIP=$(find src-tauri/target -name "*.app" -type d -maxdepth 6 2>/dev/null | head -1)
+          
+          # Create zip for GitHub release
+          if [ -n "$APP" ]; then
+            APP_NAME=$(basename "$APP" .app)
+            cd "$(dirname "$APP")"
+            zip -r "/tmp/${APP_NAME}.zip" "$(basename "$APP")"
+            echo "zip=/tmp/${APP_NAME}.zip" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "dmg=${DMG}" >> $GITHUB_OUTPUT
+          echo "app=${APP}" >> $GITHUB_OUTPUT
+
+      - name: Find Windows artifacts
+        if: runner.os == 'Windows'
+        id: windows_artifacts
+        run: |
+          $msi = Get-ChildItem -Path src-tauri/target -Recurse -Filter "*.msi" | Select-Object -First 1
+          $exe = Get-ChildItem -Path src-tauri/target -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq "nsz-converter.exe" } | Select-Object -First 1
+          echo "msi=$($msi.FullName)" >> $env:GITHUB_OUTPUT
+          echo "exe=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: Find Linux artifacts
+        if: runner.os == 'Linux'
+        id: linux_artifacts
+        run: |
+          APPIMAGE=$(find src-tauri/target -name "*.AppImage" -type f 2>/dev/null | head -1)
+          DEB=$(find src-tauri/target -name "*.deb" -type f 2>/dev/null | head -1)
+          echo "appimage=${APPIMAGE}" >> $GITHUB_OUTPUT
+          echo "deb=${DEB}" >> $GITHUB_OUTPUT
+
+      - name: Upload DMG
+        if: matrix.artifact == 'macos-arm64' && steps.macos_artifacts.outputs.dmg != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ steps.macos_artifacts.outputs.dmg }}
+
+      - name: Upload macOS ZIP
+        if: matrix.artifact == 'macos-arm64' && steps.macos_artifacts.outputs.zip != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}-zip
+          path: ${{ steps.macos_artifacts.outputs.zip }}
+
+      - name: Upload macOS x64 DMG
+        if: matrix.artifact == 'macos-x64' && steps.macos_artifacts.outputs.dmg != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ steps.macos_artifacts.outputs.dmg }}
+
+      - name: Upload Windows MSI
+        if: matrix.artifact == 'windows-x64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ steps.windows_artifacts.outputs.msi }}
+
+      - name: Upload Linux AppImage
+        if: matrix.artifact == 'linux-x64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}-appimage
+          path: ${{ steps.linux_artifacts.outputs.appimage }}
+
+      - name: Upload Linux DEB
+        if: matrix.artifact == 'linux-x64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}-deb
+          path: ${{ steps.linux_artifacts.outputs.deb }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Get tag
+        id: tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [ -z "$TAG" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          fi
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "NSZ Converter ${{ steps.tag.outputs.tag }}"
+          body: |
+            ## NSZ Converter ${{ steps.tag.outputs.tag }}
+            
+            Production-ready NSZ ↔ NSP converter with beautiful Discord-style GUI.
+            
+            ### What's New
+            - Beautiful dark theme matching Discord aesthetic
+            - Automatic file monitoring and NSZ→NSP conversion
+            - Game name mappings → organized output folders
+            - Embedded nsz runtime (no Python required)
+            - Multi-part NSP detection
+            
+            ### Downloads
+            
+            | Platform | File | Format |
+            |----------|------|--------|
+            | 🍎 macOS ARM64 (Apple Silicon) | `.dmg` | Disk Image |
+            | 🍎 macOS x64 (Intel) | `.dmg` | Disk Image |
+            | 🪟 Windows x64 | `.msi` | Installer |
+            | 🐧 Linux x64 | `.AppImage` | Portable |
+            | 🐧 Linux x64 | `.deb` | Debian Package |
+            
+            ### Requirements
+            - Nintendo Switch `prod.keys` file (user-provided)
+            - NSZ runtime is bundled (auto-downloaded on first run)
+            
+            ### Installation
+            - **macOS**: Open `.dmg`, drag to Applications
+            - **Windows**: Run `.msi` installer
+            - **Linux AppImage**: `chmod +x *.AppImage && ./nsz-converter*.AppImage`
+            - **Linux DEB**: `sudo dpkg -i nsz-converter*.deb`
+            
+            ### Documentation
+            - [Architecture](https://github.com/Sigmachan/nsz-converter/blob/master/ARCHITECTURE.md)
+            - [Build from source](https://github.com/Sigmachan/nsz-converter/blob/master/BUILD.md)
+            
+            ### Credits
+            - [nsz](https://github.com/nicoboss/nsz) - The NSZ format library by nicoboss
+          files: |
+            macos-arm64/**
+            macos-arm64-zip/**
+            macos-x64/**
+            windows-x64/**
+            linux-x64-appimage/**
+            linux-x64-deb/**
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
